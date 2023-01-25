@@ -1,7 +1,7 @@
 gmpy2 = None
-import random
-
 import gmpy2
+
+import random
 
 random.seed(0)
 
@@ -28,6 +28,21 @@ def inv(a, n):
         if g != 1:
             raise InvError(g)
         return s % n
+
+    # Slow version below
+    '''
+    r1, s1, t1 = 1, 0, a
+    r2, s2, t2 = 0, 1, n
+    while t2:
+        q = t1//t2
+        r1, r2 = r2, r1-q*r2
+        s1, s2 = s2, s1-q*s2
+        t1, t2 = t2, t1-q*t2
+
+    if t1!=1: raise InvError(t1)
+    else: return r1
+    '''
+
 
 class ECpoint(object):
     def __init__(self, A, B, N, x, y, *, prepare=True):
@@ -203,6 +218,8 @@ def ProcessCurve(*, n, bound, bound_pow, shared, rand_seed, curve_idx, num_curve
     except InvError as e:
         d = e.value
         if d != n:
+            Print(
+                f'\nFactored on curve {curve_idx} ({(curve_idx + 1) / num_curves * 100.:.02f}%) (rand_seed = {rand_seed})!')
             return {'factors': sorted([d, n // d])}
     except BaseException as ex:
         shared['finish'] = True
@@ -216,16 +233,26 @@ def Print(*pargs, **nargs):
 
 def ECM(n, *, processes=None):
     import math, multiprocessing as mp, time
+    from datetime import datetime as dt
+
     Print(f'Factoring {n}')
 
     if fermat_prp(n):
         return [n]
 
+    Print('Calculating. Wait...')
+
+    start_time = dt.now()
     bound = max(int(math.e ** (1 / 2 * math.sqrt(math.log(n) * math.log(math.log(n))))), 100)
     bound_pow = max(bound, 1 << 18)
     factor_log = math.log2(n) / 2
     max_curves = NeededCurves(bound, factor_log)
+    opt_bound_log = OptimalBoundLog(factor_log, bound_pow)
     processes = processes or mp.cpu_count()
+
+    Print(f'n 2^{math.log2(n):.02f}, bound 2^{math.log2(bound):.02f} (optimal 2^{opt_bound_log:.02f}, ' +
+          f'{Work2(bound, bound_pow, factor_log) / Work2(2 ** opt_bound_log, bound_pow, factor_log):.03f}x faster), ' +
+          f'need at most {max_curves} curves (factor up to 2^{factor_log:.02f})')
 
     with mp.Manager() as manager, mp.Pool(processes) as pool:
         try:
@@ -253,6 +280,10 @@ def ECM(n, *, processes=None):
                             return e['factors']
                         ncurves += 1
                         if time.time() - report_time >= 60:
+                            Print(
+                                f'\ncurves {ncurves:>5}/{max_curves} ({ncurves / max_curves * 100.:>7.03f}%),  factors ' +
+                                f'< 2^{FactorBitSize(bound, ncurves):.03f},  ' +
+                                f'time {(dt(2000, 1, 1) + (dt.now() - start_time)).strftime("%H:%M:%S"):>9}')
                             report_time = time.time()
                     res = res2
                     time.sleep(0.01)
@@ -262,11 +293,13 @@ def ECM(n, *, processes=None):
             shared['finish'] = True
             pool.close()
             pool.join()
+            Print()
 
     return [n]
 
 
 def fermat_prp(n, trials=32):
+    # https://en.wikipedia.org/wiki/Fermat_primality_test
     if n <= 16:
         return n in (2, 3, 5, 7, 11, 13)
     for i in range(trials):
@@ -287,10 +320,20 @@ def Prod(it):
     return functools.reduce(lambda x, y: x * y, it, 1)
 
 
-def run():
+def test():
+    import time
+    # First 190 digits of Pi
     pi = 1569275433846670190958947524742355825262149596324592390121
+    bits = 112
+    nprimes = 2
+    tb = time.time()
     fs = ECM(pi)
     Print('Factors:', ', '.join([('C', 'P')[fermat_prp(e)] + f' {e}' for e in fs]))
+    assert pi == Prod(fs), (pi, fs)
+    Print(sum(fermat_prp(e) for e in fs), 'prime,', sum(not fermat_prp(e) for e in fs), 'composite')
+    Print('All factors are prime!!!' if all(fermat_prp(e) for e in fs) else 'Composite factors remaining...')
+    Print(f'Time {time.time() - tb:.01f} sec')
+
 
 if __name__ == '__main__':
-    run()
+    test()
